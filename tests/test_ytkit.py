@@ -72,7 +72,10 @@ class H(BaseHTTPRequestHandler):
                                   if ok else {"error": "invalid_grant"}, 200 if ok else 400)
             if f.get("refresh_token") != "RT-1":
                 return self._send({"error": "invalid_grant"}, 400)
-            return self._send({"access_token": "AT-1", "expires_in": 3600})
+            resp = {"access_token": "AT-1", "expires_in": 3600}
+            if STATE.get("rt_exp"):
+                resp["refresh_token_expires_in"] = STATE["rt_exp"]
+            return self._send(resp)
         if not self._auth_ok():
             return
         if u.path == "/upload/youtube/v3/videos":
@@ -207,7 +210,12 @@ def check(name, cond, info=""):
 
 # --- read commands
 c, d, _ = run("check")
-check("check connects", c == 0 and d["channel"] == "Grinder" and d["credentials_from"] == "env", d)
+check("check connects", c == 0 and d["channel"] == "Grinder" and d["credentials_from"] == "env" and d["login"] == "permanent", d)
+STATE["rt_exp"] = 518400
+ytkit._ACCESS.update(token=None, exp=0)
+c, d, _ = run("check")
+check("check flags an expiring login", c == 0 and d["login"].startswith("expires in 6.0 days"), d)
+STATE["rt_exp"] = None
 
 c, d, _ = run("channel", "@grinder5")
 check("channel by handle", c == 0 and d["subscribers"] == 1810 and d["handle"] == "@grinder5", d)

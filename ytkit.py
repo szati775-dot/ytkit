@@ -39,7 +39,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 API = os.environ.get("YTKIT_API_BASE", "https://www.googleapis.com")
 ANALYTICS = os.environ.get("YTKIT_ANALYTICS_BASE", "https://youtubeanalytics.googleapis.com")
@@ -172,6 +172,8 @@ def access_token():
         raise YtError("Token refresh failed (%s): %s%s" % (e.code, msg.strip(), hint))
     _ACCESS["token"] = data["access_token"]
     _ACCESS["exp"] = time.time() + int(data.get("expires_in", 3600))
+    # Google only sends this for logins that expire (e.g. an app still in Testing).
+    _ACCESS["rt_expires_in"] = data.get("refresh_token_expires_in")
     return _ACCESS["token"]
 
 
@@ -899,7 +901,9 @@ def cmd_quota(a):
 def cmd_check(a):
     c = load_creds()
     ch = slim_channel(get_channel())
-    out({"ok": True, "credentials_from": c["_source"], "channel": ch["title"], "channel_id": ch["id"],
+    rt = _ACCESS.get("rt_expires_in")
+    login = "permanent" if not rt else "expires in %.1f days (app still in Testing? publish it, then reconnect)" % (int(rt) / 86400)
+    out({"ok": True, "credentials_from": c["_source"], "login": login, "channel": ch["title"], "channel_id": ch["id"],
          "subscribers": ch["subscribers"], "version": VERSION})
 
 
