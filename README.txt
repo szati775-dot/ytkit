@@ -9,6 +9,8 @@ FILES
   ytkit.bat            Windows launcher:  ytkit channel
   connect-youtube.bat  one-time guided setup: opens each Google page, finds the
                        downloaded key in Downloads, signs in, copies the line for Claude
+  setup-deepseek.bat   optional: installs Ollama and the DeepSeek-R1 AI model on
+                       this PC (free, offline), then opens a chat. Size: setup-deepseek.bat 14b
   tests\test_ytkit.py  offline test against a fake Google server (no real calls)
 
 CREDENTIALS (first match wins)

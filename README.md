@@ -7,6 +7,8 @@ plus YouTube autocomplete for keyword ideas.
 - Python 3.9+ standard library only. Nothing to install.
 - Windows: double-click `connect-youtube.bat` once for the guided setup, then use `ytkit.bat <command>`.
 - Full command list: [README.txt](README.txt), or `python ytkit.py -h`.
+- Optional local AI: double-click `setup-deepseek.bat` to install [Ollama](https://ollama.com) and a DeepSeek-R1 model on your PC
+  (free, private, offline) and chat with it. Run it again any time to chat; pass a size such as `setup-deepseek.bat 14b`.
 - Tests (offline, fake Google server): `python tests/test_ytkit.py`.
 
 Anything public (replies, edits, thumbnails, publishing) only runs with `--yes`.
