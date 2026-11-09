@@ -179,6 +179,7 @@ srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 BASE = "http://127.0.0.1:%d" % srv.server_address[1]
 TMP = tempfile.mkdtemp()
+os.environ.pop("YTKIT_CREDS", None)  # never use a real login in the offline test
 os.environ.update({"YTKIT_API_BASE": BASE, "YTKIT_ANALYTICS_BASE": BASE, "YTKIT_REPORTING_BASE": BASE,
                    "YTKIT_TOKEN_URL": BASE + "/token", "YTKIT_SUGGEST_BASE": BASE, "YTKIT_HOME": TMP,
                    "YT_CLIENT_ID": "cid", "YT_CLIENT_SECRET": "csec", "YT_REFRESH_TOKEN": "RT-1",
