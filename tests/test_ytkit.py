@@ -260,7 +260,7 @@ check("report overview", c == 0 and d["rows"][0]["views"] == 100, d)
 c, d, _ = run("report", "top-videos", "--start", "2026-10-01", "--content-type", "SHORTS")
 rq = [x for x in LOG if x[1] == "/v2/reports"][-1][2]
 check("top-videos joins titles", c == 0 and d["rows"][0]["title"] == "Video 0" and d["rows"][0]["short"] is True, d)
-check("content-type filter + dates", rq["filters"] == "creatorContentType==SHORTS" and rq["startDate"] == "2026-10-01"
+check("content-type filter + dates", rq["filters"] == "creatorContentType==shorts" and rq["startDate"] == "2026-10-01"
       and rq["ids"] == "channel==MINE", rq)
 c, d, _ = run("report", "search-terms", "--video", "v0")
 rq = [x for x in LOG if x[1] == "/v2/reports"][-1][2]
@@ -270,6 +270,12 @@ check("retention needs --video", c == 2 and "--video" in e, e)
 c, d, _ = run("report", "retention", "--video", "v0")
 rq = [x for x in LOG if x[1] == "/v2/reports"][-1][2]
 check("retention query", c == 0 and rq["dimensions"] == "elapsedVideoTimeRatio" and rq["filters"] == "video==v0", rq)
+c, d, _ = run("analytics", "--metrics", "views", "--dimensions", "video", "--sort", "-views", "--start", "7d")
+rq = [x for x in LOG if x[1] == "/v2/reports"][-1][2]
+check("--sort -views accepted", c == 0 and rq["sort"] == "-views", rq)
+c, d, _ = run("report", "top-videos", "--content-type", "VIDEO_ON_DEMAND")
+rq = [x for x in LOG if x[1] == "/v2/reports"][-1][2]
+check("content type sent in API spelling", rq["filters"] == "creatorContentType==videoOnDemand", rq)
 c, d, _ = run("analytics", "--metrics", "views", "--dimensions", "day", "--start", "7d")
 check("raw analytics", c == 0 and d[0]["day"] == "X", d)
 

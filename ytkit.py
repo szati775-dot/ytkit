@@ -39,7 +39,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 API = os.environ.get("YTKIT_API_BASE", "https://www.googleapis.com")
 ANALYTICS = os.environ.get("YTKIT_ANALYTICS_BASE", "https://youtubeanalytics.googleapis.com")
@@ -631,6 +631,11 @@ PRESETS = {
 }
 
 
+# The API wants camelCase values; accept the friendlier upper-case names too.
+CONTENT_TYPES = {"SHORTS": "shorts", "VIDEO_ON_DEMAND": "videoOnDemand", "LIVE_STREAM": "liveStream",
+                 "shorts": "shorts", "videoOnDemand": "videoOnDemand", "liveStream": "liveStream"}
+
+
 def cmd_report(a):
     start, end = date_arg(a.start, 28), date_arg(a.end, 0)
     if a.preset == "retention":
@@ -645,7 +650,7 @@ def cmd_report(a):
         return
     p = dict(PRESETS[a.preset])
     filters = [f for f in (p.get("filters"), ("video==" + a.video) if a.video else None,
-                           ("creatorContentType==" + a.content_type) if a.content_type else None) if f]
+                           ("creatorContentType==" + CONTENT_TYPES[a.content_type]) if a.content_type else None) if f]
     p["filters"] = ";".join(filters) or None
     if a.limit:
         p["limit"] = a.limit
@@ -974,7 +979,7 @@ def build_parser():
     s.add_argument("--start", help="YYYY-MM-DD or e.g. 28d (default 28d)")
     s.add_argument("--end", help="YYYY-MM-DD or e.g. 0d (default today)")
     s.add_argument("--video", help="limit to one video id")
-    s.add_argument("--content-type", choices=["SHORTS", "VIDEO_ON_DEMAND", "LIVE_STREAM"])
+    s.add_argument("--content-type", choices=sorted(CONTENT_TYPES))
     s.add_argument("--limit", type=int)
     s.set_defaults(fn=cmd_report)
 
@@ -1058,6 +1063,11 @@ def main(argv=None):
             sys.stdout.reconfigure(encoding="utf-8")
         except (OSError, ValueError):
             pass
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Let "--sort -views" work (argparse would read "-views" as an option).
+    for i in range(len(argv) - 1, 0, -1):
+        if argv[i - 1] == "--sort" and argv[i].startswith("-"):
+            argv[i - 1:i + 1] = ["--sort=" + argv[i]]
     a = build_parser().parse_args(argv)
     try:
         a.fn(a)
