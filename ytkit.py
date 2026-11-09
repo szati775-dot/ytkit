@@ -77,7 +77,7 @@ def out(obj):
 def pacific_today():
     # Quota resets at midnight Pacific time. Approximate PT as UTC-8 (-7 in DST
     # is close enough for a local counter).
-    return (dt.datetime.utcnow() - dt.timedelta(hours=8)).strftime("%Y-%m-%d")
+    return (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
 def add_quota(units, what):
@@ -529,7 +529,7 @@ def cmd_search(a):
         for c in yt("GET", "channels", {"part": "statistics", "id": ",".join(group)}).get("items", []):
             subs[c["id"]] = int(c["statistics"].get("subscriberCount", 0) or 0)
     rows = []
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     for v in vids:
         d = slim_video(v)
         d["channel"] = v["snippet"]["channelTitle"]
