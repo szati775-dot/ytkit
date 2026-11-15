@@ -443,6 +443,28 @@ c, d, e = run("check")
 check("bad YTKIT_CREDS -> clear error", c == 2 and "YTKIT_CREDS" in e, e)
 del os.environ["YTKIT_CREDS"]
 
+# --- seo (advertools-style weighted word frequency)
+rows = {r["term"]: r for r in ytkit.word_frequency(
+    ["POV: You're a Maus in War Thunder", "POV: You're a Heli in War Thunder", "Mistel montage War Thunder"],
+    [9000, 42000, 1000], 2, 2)}
+check("seo weighted frequency + lift", rows["pov"]["videos"] == 2 and rows["pov"]["total_views"] == 51000
+      and rows["pov"]["lift"] == 1.47 and rows["war thunder"]["lift"] == 1.0 and "you're" not in rows, rows)
+check("seo phrases skip stopword edges", "in war" not in ytkit.phrases("Maus in War Thunder", 2)
+      and "war thunder" in ytkit.phrases("Maus in War Thunder", 2))
+sj = os.path.join(TMP, "seo.json")
+json.dump([{"title": "POV: You're a Maus in War Thunder", "views": 9000},
+           {"title": "POV: You're a Heli in War Thunder", "views": 42000},
+           {"title": "Mistel montage War Thunder", "views": 1000}], open(sj, "w"))
+n0 = len(LOG)
+c, d, _ = run("seo", "words", "--from-json", sj, "--top", "3")
+check("seo words from json, no API calls", c == 0 and d["terms"][0]["term"] == "pov" and len(LOG) == n0, d)
+c, d, _ = run("seo", "check", "--from-json", sj, "--title", "F-15EX VS EVERY JET IN WAR THUNDER WOW WHAT A PLANE OMG THIS IS SO INSANE",
+              "--search", "war thunder f-15ex")
+check("seo check flags length, caps, missing winner", c == 0 and len(d["tips"]) == 2
+      and d["winning_terms_not_used"][0]["term"] == "pov", d)
+c, d, _ = run("seo", "words", "--search", "war thunder", "--min-count", "1")
+check("seo words from search", c == 0 and d["videos"] > 0 and any(q[1] == "/youtube/v3/search" for q in LOG[n0:]), d)
+
 # --- setup finds the newest downloaded key
 dl1, dl2 = tempfile.mkdtemp(), tempfile.mkdtemp()
 open(os.path.join(dl1, "client_secret_old.json"), "w").write("{}")

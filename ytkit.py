@@ -39,7 +39,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-VERSION = "1.1.2"
+VERSION = "1.2.0"
 
 API = os.environ.get("YTKIT_API_BASE", "https://www.googleapis.com")
 ANALYTICS = os.environ.get("YTKIT_ANALYTICS_BASE", "https://youtubeanalytics.googleapis.com")
@@ -599,6 +599,124 @@ def cmd_keywords(a):
     out(result)
 
 
+
+# ---------------------------------------------------------------------- seo
+# Absolute vs weighted word frequency, after advertools.word_frequency
+# (Elias Dabbas, MIT, https://github.com/eliasdabbas/advertools): a word used in
+# few titles but on big videos is worth more than a word used everywhere.
+STOPWORDS = set("""a about after all also am an and any are as at be been but by can could
+did do does for from had has have he her his how i if in into is it its just me my no not
+now of on one or our out over she so than that the their them then there these they this
+to too up us very was we were what when which who why will with you your yours i'm it's
+you're you'll we're they're
+don't can't vs""".split())
+WORD_RE = re.compile(r"[#@]?[\w][\w'\-\.]*", re.UNICODE)
+
+
+def tokenize(text):
+    words = []
+    for w in WORD_RE.findall((text or "").lower()):
+        w = w.strip(".'-")
+        if w and not w.isdigit() or (w.isdigit() and len(w) >= 2):
+            words.append(w)
+    return words
+
+
+def phrases(text, n):
+    words = tokenize(text)
+    out_ = []
+    for size in range(1, n + 1):
+        for i in range(len(words) - size + 1):
+            chunk = words[i:i + size]
+            if chunk[0] in STOPWORDS or chunk[-1] in STOPWORDS:
+                continue
+            out_.append(" ".join(chunk))
+    return out_
+
+
+def word_frequency(texts, weights, n=2, min_count=2):
+    """Rows of term, videos (abs_freq), total_views (wtd_freq), avg_views
+    (rel_value) and lift = avg_views / the set's average views."""
+    stats = {}
+    for text, w in zip(texts, weights):
+        for term in set(phrases(text, n)):
+            st = stats.setdefault(term, [0, 0])
+            st[0] += 1
+            st[1] += w
+    mean = (sum(weights) / len(weights)) if weights else 0
+    rows = []
+    for term, (cnt, tot) in stats.items():
+        if cnt < min_count:
+            continue
+        avg = tot / cnt
+        rows.append({"term": term, "videos": cnt, "total_views": tot, "avg_views": round(avg),
+                     "lift": round(avg / mean, 2) if mean else None})
+    return rows
+
+
+def seo_videos(a):
+    """The video set to analyse: --from-json file, --search query, or a channel."""
+    if a.from_json:
+        with open(a.from_json, encoding="utf-8") as f:
+            data = json.load(f)
+        vids = data.get("videos", data) if isinstance(data, dict) else data
+        return [{"title": v.get("title", ""), "tags": v.get("tags") or [], "views": int(v.get("views", 0) or 0),
+                 "short": v.get("short")} for v in vids]
+    if a.search:
+        r = yt("GET", "search", {"part": "id", "q": a.search, "type": "video", "maxResults": min(a.limit, 50),
+                                 "order": "relevance", "regionCode": a.region,
+                                 "videoDuration": "short" if a.shorts else None}, cost="search")
+        raw = video_details([i["id"]["videoId"] for i in r.get("items", []) if i["id"].get("videoId")],
+                            "snippet,statistics,contentDetails")
+    else:
+        raw = channel_uploads(resolve_channel(a.channel), a.limit)
+    vids = []
+    for v in raw:
+        d = slim_video(v)
+        d["tags"] = v.get("snippet", {}).get("tags", [])
+        vids.append(d)
+    if a.shorts:
+        vids = [v for v in vids if v["short"]]
+    if a.long:
+        vids = [v for v in vids if not v["short"]]
+    return vids
+
+
+def cmd_seo(a):
+    vids = seo_videos(a)
+    if not vids:
+        raise YtError("no videos to analyse")
+    if a.action == "words":
+        texts = [v["title"] + ((" | " + " | ".join(v["tags"])) if a.tags else "") for v in vids]
+        rows = word_frequency(texts, [v["views"] for v in vids], a.ngram, a.min_count)
+        key = {"lift": "lift", "views": "total_views", "count": "videos"}[a.sort]
+        rows.sort(key=lambda r: (-(r[key] or 0), -r["videos"]))
+        out({"videos": len(vids), "average_views": round(sum(v["views"] for v in vids) / len(vids)),
+             "note": "lift > 1: titles with this term beat the average of this set (a hint, not proof)",
+             "terms": rows[:a.top]})
+        return
+    # check: score a draft title (and tags) against what works in the set
+    title = a.title or ""
+    rows = word_frequency([v["title"] for v in vids], [v["views"] for v in vids], 2, 2)
+    winners = sorted([r for r in rows if (r["lift"] or 0) >= 1.2], key=lambda r: -r["lift"])
+    mine = set(phrases(title + " " + " ".join((a.tags_list or "").split(",")), 2))
+    words = tokenize(title)
+    first = words[:4]
+    query_words = [w for w in tokenize(a.search or "") if w not in STOPWORDS]
+    tips = []
+    if len(title) > 70:
+        tips.append("title is %d chars; search cuts at ~70, Shorts feed shows ~40" % len(title))
+    elif a.shorts and len(title) > 45:
+        tips.append("Shorts feed shows ~40 chars; put the hook first")
+    if query_words and not any(w in first for w in query_words):
+        tips.append("main keyword is not in the first 4 words")
+    if title.isupper():
+        tips.append("all caps reads as spam; caps on 1-2 words only")
+    out({"title": title, "length": len(title), "videos_compared": len(vids),
+         "uses_winning_terms": [r for r in winners if r["term"] in mine][:10],
+         "winning_terms_not_used": [r for r in winners if r["term"] not in mine][:10],
+         "tips": tips})
+
 # ---------------------------------------------------------------- analytics
 
 def analytics(start, end, metrics, dimensions=None, filters=None, sort=None, limit=None, channel="MINE"):
@@ -890,6 +1008,305 @@ def cmd_captions(a):
     sys.stdout.write(data.decode("utf-8", errors="replace"))
 
 
+# ------------------------------------------------------------------- social
+# Cross-posting Shorts to Facebook Page Reels, Instagram Reels and TikTok through
+# each platform's OFFICIAL API (no browser automation, no login cookies).
+# Meta flow modelled on Mixpost (Inovector, MIT, https://github.com/inovector/mixpost:
+# graph version pinning, page access tokens, upload sessions); Reels and TikTok
+# endpoints follow Meta's Reels Publishing API and TikTok's Content Posting API docs.
+GRAPH = os.environ.get("YTKIT_GRAPH_BASE", "https://graph.facebook.com")
+RUPLOAD = os.environ.get("YTKIT_RUPLOAD_BASE", "https://rupload.facebook.com")
+TIKTOK = os.environ.get("YTKIT_TIKTOK_BASE", "https://open.tiktokapis.com")
+GRAPH_VERSION = os.environ.get("YTKIT_GRAPH_VERSION", "v24.0")
+SOCIAL_FILE = os.environ.get("YTKIT_SOCIAL") or os.path.join(HOME, "social.json")
+SOCIAL_KEYS = ("META_PAGE_ID", "META_PAGE_TOKEN", "IG_USER_ID",
+               "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_REFRESH_TOKEN")
+TIKTOK_SCOPES = "user.info.basic,video.publish,video.upload"
+TIKTOK_CHUNK = 10 * 1024 * 1024
+
+
+def social_creds():
+    data = {}
+    if os.path.exists(SOCIAL_FILE):
+        with open(SOCIAL_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    for k in SOCIAL_KEYS:
+        if os.environ.get(k):
+            data[k] = os.environ[k]
+    return data
+
+
+def save_social(update):
+    data = {}
+    if os.path.exists(SOCIAL_FILE):
+        with open(SOCIAL_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    data.update(update)
+    os.makedirs(os.path.dirname(SOCIAL_FILE), exist_ok=True)
+    with open(SOCIAL_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def need_social(c, *keys):
+    missing = [k for k in keys if not c.get(k)]
+    if missing:
+        raise YtError("missing %s. Run `ytkit social meta-token` / `ytkit social tiktok-auth`, "
+                      "or set them as environment variables." % ", ".join(missing))
+
+
+def graph(method, path, params=None):
+    return http(method, "%s/%s/%s" % (GRAPH, GRAPH_VERSION, path.lstrip("/")), params, auth=False)
+
+
+def rupload(url, token, data):
+    return http("POST", url, body=data, auth=False, timeout=600, headers={
+        "Authorization": "OAuth " + token, "offset": "0", "file_size": str(len(data)),
+        "Content-Type": "application/octet-stream"})
+
+
+def read_video(path, max_mb=1000):
+    if not os.path.isfile(path):
+        raise YtError("no such file: " + path)
+    size = os.path.getsize(path)
+    if size > max_mb * 1024 * 1024:
+        raise YtError("%s is %.0f MB, over the %d MB limit" % (path, size / 1048576, max_mb))
+    return size
+
+
+def post_facebook(c, path, caption, wait=True):
+    need_social(c, "META_PAGE_ID", "META_PAGE_TOKEN")
+    page, tok = c["META_PAGE_ID"], c["META_PAGE_TOKEN"]
+    read_video(path)
+    start = graph("POST", "%s/video_reels" % page, {"upload_phase": "start", "access_token": tok})
+    with open(path, "rb") as f:
+        data = f.read()
+    up = rupload(start.get("upload_url") or "%s/video-upload/%s/%s" % (RUPLOAD, GRAPH_VERSION, start["video_id"]),
+                 tok, data)
+    if up.get("success") is False:
+        raise YtError("Facebook upload failed: %s" % up)
+    fin = graph("POST", "%s/video_reels" % page, {"upload_phase": "finish", "video_id": start["video_id"],
+                                                    "video_state": "PUBLISHED", "description": caption,
+                                                    "access_token": tok})
+    res = {"platform": "facebook", "video_id": start["video_id"], "accepted": bool(fin.get("success", True))}
+    if wait:
+        for _ in range(60):
+            st = graph("GET", start["video_id"], {"fields": "status", "access_token": tok}).get("status", {})
+            res["status"] = st.get("video_status")
+            if st.get("video_status") in ("ready", "error") or st.get("publishing_phase", {}).get("status") == "complete":
+                break
+            time.sleep(5)
+    res["url"] = "https://www.facebook.com/reel/%s" % start["video_id"]
+    return res
+
+
+def post_instagram(c, path, caption, share_to_feed=True, wait=True):
+    need_social(c, "IG_USER_ID", "META_PAGE_TOKEN")
+    ig, tok = c["IG_USER_ID"], c["META_PAGE_TOKEN"]
+    read_video(path, 1000)
+    box = graph("POST", "%s/media" % ig, {"media_type": "REELS", "upload_type": "resumable", "caption": caption,
+                                          "share_to_feed": "true" if share_to_feed else "false",
+                                          "access_token": tok})
+    with open(path, "rb") as f:
+        data = f.read()
+    rupload(box.get("uri") or "%s/ig-api-upload/%s/%s" % (RUPLOAD, GRAPH_VERSION, box["id"]), tok, data)
+    status = None
+    for _ in range(120 if wait else 1):
+        status = graph("GET", box["id"], {"fields": "status_code,status", "access_token": tok})
+        if status.get("status_code") in ("FINISHED", "ERROR", "EXPIRED"):
+            break
+        time.sleep(5)
+    if status.get("status_code") != "FINISHED":
+        raise YtError("Instagram did not finish processing the video: %s" % status)
+    pub = graph("POST", "%s/media_publish" % ig, {"creation_id": box["id"], "access_token": tok})
+    link = graph("GET", pub["id"], {"fields": "permalink", "access_token": tok}).get("permalink")
+    return {"platform": "instagram", "media_id": pub["id"], "url": link}
+
+
+def tiktok_token(c):
+    need_social(c, "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_REFRESH_TOKEN")
+    body = urllib.parse.urlencode({"client_key": c["TIKTOK_CLIENT_KEY"], "client_secret": c["TIKTOK_CLIENT_SECRET"],
+                                   "grant_type": "refresh_token",
+                                   "refresh_token": c["TIKTOK_REFRESH_TOKEN"]}).encode()
+    tok = http("POST", TIKTOK + "/v2/oauth/token/", body=body, auth=False,
+               headers={"Content-Type": "application/x-www-form-urlencoded"})
+    if "access_token" not in tok:
+        raise YtError("TikTok refused the refresh token (%s). Run `ytkit social tiktok-auth` again." % tok)
+    if tok.get("refresh_token") and tok["refresh_token"] != c["TIKTOK_REFRESH_TOKEN"]:
+        c["TIKTOK_REFRESH_TOKEN"] = tok["refresh_token"]   # TikTok may rotate it; keep the new one
+        if not os.environ.get("TIKTOK_REFRESH_TOKEN"):
+            save_social({"TIKTOK_REFRESH_TOKEN": tok["refresh_token"]})
+    return tok["access_token"]
+
+
+def tiktok(method, path, at, body=None):
+    r = http(method, TIKTOK + path, body=body, auth=False,
+             headers={"Authorization": "Bearer " + at, "Content-Type": "application/json; charset=UTF-8"})
+    err = r.get("error", {})
+    if err.get("code") not in (None, "ok"):
+        raise YtError("TikTok %s: %s %s" % (path, err.get("code"), err.get("message", "")))
+    return r.get("data", {})
+
+
+def post_tiktok(c, path, title, privacy="SELF_ONLY", wait=True):
+    at = tiktok_token(c)
+    size = read_video(path, 4000)
+    info = tiktok("POST", "/v2/post/publish/creator_info/query/", at, {})
+    options = info.get("privacy_level_options") or []
+    if options and privacy not in options:
+        raise YtError("TikTok allows only %s for this account/app (an unaudited app can post SELF_ONLY)" % options)
+    chunk = size if size < 5 * 1024 * 1024 else TIKTOK_CHUNK
+    count = max(1, size // chunk)
+    init = tiktok("POST", "/v2/post/publish/video/init/", at, {
+        "post_info": {"title": title[:2200], "privacy_level": privacy, "disable_duet": False,
+                      "disable_comment": False, "disable_stitch": False, "video_cover_timestamp_ms": 1000},
+        "source_info": {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk,
+                        "total_chunk_count": count}})
+    with open(path, "rb") as f:
+        for i in range(count):
+            start = i * chunk
+            n = (size - start) if i == count - 1 else chunk     # the last chunk takes the remainder
+            data = f.read(n)
+            http("PUT", init["upload_url"], body=data, auth=False, raw=True, timeout=600, headers={
+                "Content-Type": "video/mp4", "Content-Length": str(n),
+                "Content-Range": "bytes %d-%d/%d" % (start, start + n - 1, size)})
+    res = {"platform": "tiktok", "publish_id": init["publish_id"], "privacy": privacy}
+    for _ in range(60 if wait else 0):
+        st = tiktok("POST", "/v2/post/publish/status/fetch/", at, {"publish_id": init["publish_id"]})
+        res["status"] = st.get("status")
+        if st.get("status") in ("PUBLISH_COMPLETE", "FAILED", "SEND_TO_USER_INBOX"):
+            if st.get("fail_reason"):
+                res["fail_reason"] = st["fail_reason"]
+            ids = st.get("publicaly_available_post_id") or st.get("publicly_available_post_id") or []
+            if ids:
+                res["post_id"] = ids[0]
+            break
+        time.sleep(5)
+    return res
+
+
+def cmd_post(a):
+    c = social_creds()
+    caption = read_text_arg(a.caption) if a.caption else ""
+    targets = ["facebook", "instagram", "tiktok"] if a.platform == "all" else [a.platform]
+    read_video(a.file, 4000)
+    plan = {"file": a.file, "size_mb": round(os.path.getsize(a.file) / 1048576, 1), "platforms": targets,
+            "caption": caption, "tiktok_privacy": a.privacy if "tiktok" in targets else None}
+    if not a.yes:
+        plan["dry_run"] = True
+        plan["note"] = "nothing was posted. Add --yes once Jozsef has approved this post."
+        out(plan)
+        return
+    results = []
+    for t in targets:
+        try:
+            if t == "facebook":
+                results.append(post_facebook(c, a.file, caption, not a.no_wait))
+            elif t == "instagram":
+                results.append(post_instagram(c, a.file, caption, not a.no_feed, not a.no_wait))
+            else:
+                results.append(post_tiktok(c, a.file, a.title or caption, a.privacy, not a.no_wait))
+        except YtError as e:
+            results.append({"platform": t, "error": str(e)})
+    out(results)
+    if any("error" in r for r in results):
+        return 1
+
+
+def cmd_social(a):
+    c = social_creds()
+    if a.action == "check":
+        rep = {}
+        if c.get("META_PAGE_TOKEN"):
+            try:
+                me = graph("GET", c.get("META_PAGE_ID") or "me", {"fields": "id,name", "access_token": c["META_PAGE_TOKEN"]})
+                rep["facebook"] = me.get("name")
+                if c.get("IG_USER_ID"):
+                    rep["instagram"] = "@" + graph("GET", c["IG_USER_ID"], {"fields": "username",
+                                                   "access_token": c["META_PAGE_TOKEN"]}).get("username", "?")
+            except YtError as e:
+                rep["meta_error"] = str(e)
+        else:
+            rep["facebook"] = rep["instagram"] = "not connected (ytkit social meta-token)"
+        if c.get("TIKTOK_REFRESH_TOKEN"):
+            try:
+                info = tiktok("POST", "/v2/post/publish/creator_info/query/", tiktok_token(c), {})
+                rep["tiktok"] = "@%s, can post: %s" % (info.get("creator_username"),
+                                                       ",".join(info.get("privacy_level_options", [])))
+            except YtError as e:
+                rep["tiktok_error"] = str(e)
+        else:
+            rep["tiktok"] = "not connected (ytkit social tiktok-auth)"
+        out(rep)
+        return
+    if a.action == "meta-token":
+        if not (a.app_id and a.app_secret and a.user_token):
+            raise YtError("meta-token needs --app-id, --app-secret and --user-token (a short-lived user token "
+                          "from the Graph API Explorer with pages_show_list, pages_manage_posts, "
+                          "pages_read_engagement, instagram_basic, instagram_content_publish)")
+        long = graph("GET", "oauth/access_token", {"grant_type": "fb_exchange_token", "client_id": a.app_id,
+                                                   "client_secret": a.app_secret, "fb_exchange_token": a.user_token})
+        pages = graph("GET", "me/accounts", {"fields": "id,name,access_token,instagram_business_account",
+                                             "access_token": long["access_token"]}).get("data", [])
+        if not pages:
+            raise YtError("no Facebook Pages on this login. The Grinder Page must be managed by this account.")
+        pick = [p for p in pages if not a.page or a.page.lower() in (p["id"], p["name"].lower())]
+        if len(pick) != 1:
+            raise YtError("pick a Page with --page: %s" % ", ".join("%s (%s)" % (p["name"], p["id"]) for p in pages))
+        p = pick[0]
+        upd = {"META_PAGE_ID": p["id"], "META_PAGE_TOKEN": p["access_token"]}
+        if p.get("instagram_business_account"):
+            upd["IG_USER_ID"] = p["instagram_business_account"]["id"]
+        save_social(upd)
+        out({"saved_to": SOCIAL_FILE, "page": p["name"], "instagram_linked": "IG_USER_ID" in upd,
+             "note": "a Page token made from a long-lived user token does not expire"})
+        return
+    if a.action == "tiktok-auth":
+        if not (a.client_key and a.client_secret):
+            raise YtError("tiktok-auth needs --client-key and --client-secret from developers.tiktok.com")
+        verifier = secrets.token_urlsafe(48)
+        challenge = hashlib.sha256(verifier.encode()).hexdigest()      # TikTok desktop: hex, not base64
+        state = secrets.token_urlsafe(16)
+        got = {}
+
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                got.update({k: v[0] for k, v in q.items()})
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h2>Done. You can close this tab.</h2>")
+
+            def log_message(self, *x):
+                pass
+
+        u = urllib.parse.urlparse(a.redirect)
+        srv = HTTPServer(("127.0.0.1", u.port or 80), H)
+        url = "https://www.tiktok.com/v2/auth/authorize/?" + urllib.parse.urlencode({
+            "client_key": a.client_key, "scope": TIKTOK_SCOPES, "response_type": "code",
+            "redirect_uri": a.redirect, "state": state, "code_challenge": challenge,
+            "code_challenge_method": "S256"})
+        print("Opening TikTok sign-in. If it does not open, paste this link into the browser:\n\n" + url + "\n")
+        webbrowser.open(url)
+        t = threading.Thread(target=lambda: [srv.handle_request() for _ in range(20) if "code" not in got and "error" not in got])
+        t.start()
+        t.join(timeout=600)
+        srv.server_close()
+        if got.get("state") != state or "code" not in got:
+            raise YtError("TikTok sign-in did not complete: %s" % (got.get("error_description") or got.get("error") or "timed out"))
+        body = urllib.parse.urlencode({"client_key": a.client_key, "client_secret": a.client_secret,
+                                       "code": got["code"], "grant_type": "authorization_code",
+                                       "redirect_uri": a.redirect, "code_verifier": verifier}).encode()
+        tok = http("POST", TIKTOK + "/v2/oauth/token/", body=body, auth=False,
+                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+        if "refresh_token" not in tok:
+            raise YtError("TikTok returned no refresh token: %s" % tok)
+        save_social({"TIKTOK_CLIENT_KEY": a.client_key, "TIKTOK_CLIENT_SECRET": a.client_secret,
+                     "TIKTOK_REFRESH_TOKEN": tok["refresh_token"]})
+        out({"saved_to": SOCIAL_FILE, "scopes": tok.get("scope"),
+             "note": "refresh token lasts 365 days and is renewed on use"})
+
+
 def cmd_quota(a):
     path = os.path.join(HOME, "quota.json")
     data = {}
@@ -974,6 +1391,25 @@ def build_parser():
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_keywords)
 
+    s = sub.add_parser("seo", help="which title/tag words go with views (advertools-style); check a draft title")
+    s.add_argument("action", choices=["words", "check"])
+    s.add_argument("channel", nargs="?", default="mine", help="channel to learn from (default mine)")
+    s.add_argument("--search", help="learn from search results for this query instead (100 units)")
+    s.add_argument("--from-json", help="learn from saved `videos`/`search` output instead (no quota)")
+    s.add_argument("--title", help="check: the draft title")
+    s.add_argument("--tags", dest="tags_list", metavar="A,B", help="check: draft tags")
+    s.add_argument("--with-tags", dest="tags", action="store_true", help="words: count tags as well as titles")
+    s.add_argument("--ngram", type=int, default=2, help="longest phrase length (default 2)")
+    s.add_argument("--min-count", type=int, default=2, help="ignore terms in fewer videos")
+    s.add_argument("--sort", choices=["lift", "views", "count"], default="lift")
+    s.add_argument("--top", type=int, default=30)
+    s.add_argument("--limit", type=int, default=100)
+    s.add_argument("--region", default="GB")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--shorts", action="store_true")
+    g.add_argument("--long", action="store_true")
+    s.set_defaults(fn=cmd_seo)
+
     s = sub.add_parser("report", help="analytics presets (your channel)")
     s.add_argument("preset", choices=sorted(list(PRESETS) + ["retention"]))
     s.add_argument("--start", help="YYYY-MM-DD or e.g. 28d (default 28d)")
@@ -1048,6 +1484,31 @@ def build_parser():
     s.add_argument("--yes", action="store_true")
     s.set_defaults(fn=cmd_upload)
 
+    s = sub.add_parser("post", help="post a Short to Facebook/Instagram Reels or TikTok via official APIs (needs --yes)")
+    s.add_argument("platform", choices=["facebook", "instagram", "tiktok", "all"])
+    s.add_argument("file")
+    s.add_argument("--caption", help="text or @file.txt (hashtags included)")
+    s.add_argument("--title", help="TikTok title (default: the caption)")
+    s.add_argument("--privacy", default="SELF_ONLY",
+                   choices=["SELF_ONLY", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "PUBLIC_TO_EVERYONE"],
+                   help="TikTok privacy; unaudited TikTok apps may only post SELF_ONLY")
+    s.add_argument("--no-feed", action="store_true", help="Instagram: Reels tab only, not the main grid")
+    s.add_argument("--no-wait", action="store_true", help="don't wait for processing to finish")
+    s.add_argument("--yes", action="store_true")
+    s.set_defaults(fn=cmd_post)
+
+    s = sub.add_parser("social", help="connect/check Facebook, Instagram and TikTok for `post`")
+    s.add_argument("action", choices=["check", "meta-token", "tiktok-auth"])
+    s.add_argument("--app-id")
+    s.add_argument("--app-secret")
+    s.add_argument("--user-token", help="meta-token: short-lived user token from the Graph API Explorer")
+    s.add_argument("--page", help="meta-token: Page name or id if you manage several")
+    s.add_argument("--client-key")
+    s.add_argument("--client-secret")
+    s.add_argument("--redirect", default="http://127.0.0.1:8765/callback/",
+                   help="tiktok-auth: must match the redirect URI registered in the TikTok app")
+    s.set_defaults(fn=cmd_social)
+
     s = sub.add_parser("captions", help="list or download captions of YOUR videos")
     s.add_argument("id")
     s.add_argument("--download", action="store_true")
@@ -1070,14 +1531,14 @@ def main(argv=None):
             argv[i - 1:i + 1] = ["--sort=" + argv[i]]
     a = build_parser().parse_args(argv)
     try:
-        a.fn(a)
+        rc = a.fn(a)
     except YtError as e:
         print("ERROR: %s" % e, file=sys.stderr)
         return 2
     except FileNotFoundError as e:
         print("ERROR: file not found: %s" % e.filename, file=sys.stderr)
         return 2
-    return 0
+    return rc or 0
 
 
 if __name__ == "__main__":

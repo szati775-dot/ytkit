@@ -1,4 +1,4 @@
-ytkit 1.1 - free YouTube toolkit for the Grinder channel (replaces vidIQ)
+ytkit 1.2 - free YouTube toolkit for the Grinder channel (replaces vidIQ)
 =========================================================================
 Python 3.9+ standard library only. Nothing to pip install. Free: it uses
 Google's own YouTube APIs with your own login, inside the free daily quota
@@ -10,6 +10,9 @@ FILES
   connect-youtube.bat  one-time guided setup: opens each Google page, finds the
                        downloaded key in Downloads, signs in, copies the line for Claude
   tests\test_ytkit.py  offline test against a fake Google server (no real calls)
+  tests\test_social.py offline test of post/social against fake Meta + TikTok servers
+  tests\test_editkit.py offline test of editkit on synthetic media
+  editkit.py / .bat    editing helpers (see EXTRA TOOLS)
 
 CREDENTIALS (first match wins)
   1. env var YTKIT_CREDS (one line, printed and copied by connect-youtube.bat),
@@ -46,7 +49,37 @@ COMMANDS (add -h to any command for all options)            quota cost
   upload FILE --title T [--description @desc.txt --tags --thumbnail img.jpg
          --publish-at ISO --synthetic yes] (private unless --yes)   ~1600
   captions ID [--download --format srt]   your own videos only      50-200
+  seo words [channel|--search "q"|--from-json f] [--ngram 2 --with-tags]
+                              which title words go with views: count, total
+                              views, avg views, lift vs the set (advertools idea)
+  seo check --title "Draft" [--search "q"] [--shorts]
+                              draft title vs winning terms, length, caps, keyword spot
+  post facebook|instagram|tiktok|all FILE --caption @cap.txt [--yes]
+                              Shorts cross-post through the OFFICIAL APIs
+                              (FB Page Reels, IG Reels, TikTok). Dry run without --yes.
+                              TikTok stays SELF_ONLY until TikTok audits the app.
+  social check | meta-token --app-id --app-secret --user-token T | tiktok-auth
+         --client-key --client-secret     connect the accounts used by `post`
+                              (saved in %USERPROFILE%\.ytkit\social.json)
   quota                       today's estimated use on this machine
+
+EXTRA TOOLS (need: pip install -r requirements-editkit.txt, and ffmpeg)
+  editkit.bat beats song.mp3          BPM, beat grid, big hits + Resolve marker EDL
+  editkit.bat scenes rec.mp4          cuts + action score per shot + marker EDL
+  editkit.bat plan --music song.mp3 --video a.mp4 b.mp4 [--beats-per-cut 2 --preview]
+                                      best shots snapped to the beats -> EDL timeline
+                                      (Resolve: File > Import > Timeline) + preview mp4
+  editkit.bat trim rec.mp4 [--resolve] [--silent-speed 8]
+                                      cut dead time (auto-editor); --resolve = timeline only
+  editkit.bat loudness a.mp4 b.wav    LUFS / true peak vs the -14 LUFS upload target
+  All classical signal processing, no AI: fine on War Thunder footage.
+
+  blender\check_bpy.py script.py      catches Blender API typos before a render
+  blender\nature.py                   ground, grass tufts, boulders, scatter (Infinigen port)
+  blender\nature_demo.py              test scene:  blender -b -P nature_demo.py -- out.png 50 32
+  sfx\sfxgen.py "prompt" --seconds 3  sound effects for our own renders (Stable Audio
+                                      Open Small; needs a Hugging Face token, see the file)
+  Credits and licences: THIRD_PARTY.md
 
 SAFETY
   Anything public needs --yes. Uploads stay private by default.
