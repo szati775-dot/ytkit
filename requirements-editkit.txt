@@ -1,0 +1,9 @@
+# editkit.py and blender/check_bpy.py (ytkit.py itself needs nothing)
+librosa>=0.10
+scenedetect>=0.6.4
+opencv-python-headless>=4.8
+auto-editor>=29
+numpy
+# Blender script checker
+fake-bpy-module
+mypy
